@@ -241,6 +241,21 @@ class _CampusHomePageState extends State<CampusHomePage> {
           icon: const Icon(Icons.refresh_rounded),
         ),
       ],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: effectiveTab,
+        onDestinationSelected: (index) {
+          setState(() => _tabIndex = index);
+          if ((_isStaffOrAbove && index == 1) ||
+              (_isStaffOrAbove && index == 2) ||
+              (!_isStaffOrAbove && index == 1)) {
+            widget.controller.refreshNotifications();
+            widget.controller.refreshAnalytics();
+          }
+        },
+        backgroundColor: colors.surfaceContainer,
+        indicatorColor: colors.primaryContainer,
+        destinations: destinations,
+      ),
       child: Column(
         children: <Widget>[
           Expanded(
@@ -263,21 +278,6 @@ class _CampusHomePageState extends State<CampusHomePage> {
                 ),
               ),
             ),
-          NavigationBar(
-            selectedIndex: effectiveTab,
-            onDestinationSelected: (index) {
-              setState(() => _tabIndex = index);
-              if ((_isStaffOrAbove && index == 1) ||
-                  (_isStaffOrAbove && index == 2) ||
-                  (!_isStaffOrAbove && index == 1)) {
-                widget.controller.refreshNotifications();
-                widget.controller.refreshAnalytics();
-              }
-            },
-            backgroundColor: colors.surfaceContainer,
-            indicatorColor: colors.primaryContainer,
-            destinations: destinations,
-          ),
         ],
       ),
     );

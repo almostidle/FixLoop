@@ -235,7 +235,10 @@ class _IssueDetailPageState extends State<IssueDetailPage> {
   Widget build(BuildContext context) {
     return FixScreen(
       title: _detail?.code ?? 'Issue detail',
-      onBack: () => Navigator.of(context).pop(),
+      onBack: () {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        Navigator.of(context).pop();
+      },
       bannerMessage: _error,
       onBannerAction: _load,
       headerActions: <Widget>[

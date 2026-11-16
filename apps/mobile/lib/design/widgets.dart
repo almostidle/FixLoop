@@ -15,6 +15,7 @@ class FixScreen extends StatelessWidget {
     this.bannerMessage,
     this.onBannerAction,
     this.bannerActionLabel = 'Retry',
+    this.bottomNavigationBar,
     super.key,
   });
 
@@ -25,11 +26,13 @@ class FixScreen extends StatelessWidget {
   final String? bannerMessage;
   final VoidCallback? onBannerAction;
   final String bannerActionLabel;
+  final Widget? bottomNavigationBar;
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Scaffold(
+      bottomNavigationBar: bottomNavigationBar,
       body: SafeArea(
         child: Align(
           alignment: Alignment.topCenter,
