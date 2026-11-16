@@ -22,6 +22,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -48,7 +49,8 @@ class ComplaintControllerSecurityTest {
     @Test
     void staffCannotSubmitComplaints() throws Exception {
         mvc.perform(post("/api/v1/complaints")
-                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STAFF")))
+                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STAFF"))
+                    .authorities(new SimpleGrantedAuthority("ROLE_STAFF")))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {"categoryId":"%s","locationId":"%s","title":"Broken hallway light"}
@@ -72,7 +74,8 @@ class ComplaintControllerSecurityTest {
             .thenReturn(new ComplaintPageResponse(List.of(), 0, 20, 0, 0));
 
         mvc.perform(post("/api/v1/complaints")
-                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT")))
+                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT"))
+                    .authorities(new SimpleGrantedAuthority("ROLE_STUDENT")))
                 .header("Idempotency-Key", "idem-1")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
@@ -82,7 +85,8 @@ class ComplaintControllerSecurityTest {
             .andExpect(jsonPath("$.code").value("FL-2026-000027"));
 
         mvc.perform(get("/api/v1/complaints")
-                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT"))))
+                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT"))
+                    .authorities(new SimpleGrantedAuthority("ROLE_STUDENT"))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.page").value(0));
     }
@@ -90,7 +94,8 @@ class ComplaintControllerSecurityTest {
     @Test
     void rejectsShortTitleWithValidationError() throws Exception {
         mvc.perform(post("/api/v1/complaints")
-                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT")))
+                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT"))
+                    .authorities(new SimpleGrantedAuthority("ROLE_STUDENT")))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {"categoryId":"%s","locationId":"%s","title":"No"}

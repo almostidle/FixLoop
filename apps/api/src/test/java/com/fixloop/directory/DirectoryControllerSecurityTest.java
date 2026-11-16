@@ -18,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -46,7 +47,8 @@ class DirectoryControllerSecurityTest {
                 "HIGH", "REQUIRED", false, 1)));
 
         mvc.perform(get("/api/v1/categories")
-                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT"))))
+                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT"))
+                    .authorities(new SimpleGrantedAuthority("ROLE_STUDENT"))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].name").value("Plumbing"));
     }
@@ -54,7 +56,8 @@ class DirectoryControllerSecurityTest {
     @Test
     void studentsCannotAccessStaffDirectory() throws Exception {
         mvc.perform(get("/api/v1/users/staff")
-                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT"))))
+                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "STUDENT"))
+                    .authorities(new SimpleGrantedAuthority("ROLE_STUDENT"))))
             .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.code").value("FORBIDDEN"));
     }
@@ -66,7 +69,8 @@ class DirectoryControllerSecurityTest {
                 "tech.facilities@bmu.edu.in", Role.STAFF, UUID.randomUUID(), "Facilities", null)));
 
         mvc.perform(get("/api/v1/users/staff")
-                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "SUPERVISOR"))))
+                .with(jwt().jwt(t -> t.subject(CALLER_ID.toString()).claim("role", "SUPERVISOR"))
+                    .authorities(new SimpleGrantedAuthority("ROLE_SUPERVISOR"))))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$[0].email").value("tech.facilities@bmu.edu.in"));
     }

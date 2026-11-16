@@ -472,8 +472,14 @@ class _CampusHomePageState extends State<CampusHomePage> {
     if (_user.role == UserRole.student) {
       return SegmentedButton<_QueueFilter>(
         segments: const <ButtonSegment<_QueueFilter>>[
-          ButtonSegment<_QueueFilter>(value: _QueueFilter.mine, label: Text('My complaints')),
-          ButtonSegment<_QueueFilter>(value: _QueueFilter.campus, label: Text('Campus activity')),
+          ButtonSegment<_QueueFilter>(
+            value: _QueueFilter.mine,
+            label: Text('My complaints', maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          ButtonSegment<_QueueFilter>(
+            value: _QueueFilter.campus,
+            label: Text('Campus activity', maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
         ],
         selected: <_QueueFilter>{_queueFilter},
         onSelectionChanged: (sel) {
@@ -890,24 +896,25 @@ class _FeaturedResolvedCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return MoonArch(
-      height: 244,
+      height: 252,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 18, 24, 16),
+        padding: const EdgeInsets.fromLTRB(24, 18, 24, 18),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.end,
           children: <Widget>[
-            const MoonGraphic(phase: MoonPhase.almostFull, size: 80),
+            const MoonGraphic(phase: MoonPhase.almostFull, size: 74),
             const SizedBox(height: 8),
             Text(
               issue.title,
               textAlign: TextAlign.center,
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: text.titleMedium,
             ),
             const SizedBox(height: 2),
             Text('${issue.code} · Awaiting your check', textAlign: TextAlign.center),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             FilledButton(onPressed: onOpen, child: const Text('Check it')),
           ],
         ),
@@ -947,7 +954,10 @@ class _ComplaintRow extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Row(
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 2,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: <Widget>[
                           Text(
                             issue.code,
@@ -956,15 +966,12 @@ class _ComplaintRow extends StatelessWidget {
                               fontWeight: FontWeight.w700,
                             ),
                           ),
-                          if (issue.departmentCode != null) ...<Widget>[
-                            const SizedBox(width: 8),
+                          if (issue.departmentCode != null)
                             Text(
                               issue.departmentCode!,
                               style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                             ),
-                          ],
-                          if (issue.isOverdue) ...<Widget>[
-                            const SizedBox(width: 8),
+                          if (issue.isOverdue)
                             Text(
                               'OVERDUE',
                               style: text.bodyMedium?.copyWith(
@@ -972,7 +979,6 @@ class _ComplaintRow extends StatelessWidget {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                          ],
                         ],
                       ),
                       const SizedBox(height: 3),

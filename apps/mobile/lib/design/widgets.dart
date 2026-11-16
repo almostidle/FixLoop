@@ -388,7 +388,7 @@ class MoonArch extends StatelessWidget {
         final radius = Radius.elliptical(constraints.maxWidth / 2, effectiveHeight * 0.85);
         return Container(
           width: double.infinity,
-          height: effectiveHeight,
+          constraints: BoxConstraints(minHeight: effectiveHeight),
           decoration: BoxDecoration(
             color: colors.primaryContainer,
             borderRadius: BorderRadius.only(

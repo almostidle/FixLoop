@@ -2,6 +2,8 @@ package com.fixloop.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -10,7 +12,6 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
@@ -49,8 +50,15 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class ComplaintWorkflowIT {
     private static final String PASSWORD = "campus-lamp-2026";
 
-    @TempDir
-    static Path storageDir;
+    private static final Path STORAGE_DIR;
+
+    static {
+        try {
+            STORAGE_DIR = Files.createTempDirectory("fixloop-workflow-it-");
+        } catch (IOException exception) {
+            throw new ExceptionInInitializerError(exception);
+        }
+    }
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
@@ -62,7 +70,7 @@ class ComplaintWorkflowIT {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
         registry.add("spring.datasource.hikari.data-source-properties.sslmode", () -> "disable");
         registry.add("spring.flyway.enabled", () -> true);
-        registry.add("fixloop.storage.root", () -> storageDir.toString());
+        registry.add("fixloop.storage.root", () -> STORAGE_DIR.toString());
     }
 
     @Autowired
@@ -122,7 +130,7 @@ class ComplaintWorkflowIT {
         jdbc.update("INSERT INTO categories (id, name, theme, default_severity, photo_policy, is_sensitive, sort_order) "
             + "VALUES (?, 'Wi-Fi & Campus Network', 'IT', 'MEDIUM', 'OPTIONAL', false, 2)", catWifiId);
         jdbc.update("INSERT INTO categories (id, name, theme, default_severity, photo_policy, is_sensitive, sort_order) "
-            + "VALUES (?, 'Harassment & Sensitive Grievance', 'WELFARE', 'CRITICAL', 'DISABLED', true, 3)", catSensitiveId);
+            + "VALUES (?, 'Harassment & Sensitive Grievance', 'SENSITIVE', 'CRITICAL', 'DISABLED', true, 3)", catSensitiveId);
 
         student1Id = insertUser("student1@bmu.edu.in", hash, "Aarav Mehta", "STUDENT", null, null);
         student2Id = insertUser("student2@bmu.edu.in", hash, "Priya Sharma", "STUDENT", null, null);
@@ -141,9 +149,9 @@ class ComplaintWorkflowIT {
         jdbc.update("INSERT INTO routing_rules (priority, category_id, department_id, note) VALUES (999, NULL, ?, 'Fallback FAC')",
             deptFacId);
 
-        jdbc.update("INSERT INTO sla_policies (category_id, severity, ack_minutes, resolve_minutes) VALUES (NULL, 'HIGH', 120, 720)");
-        jdbc.update("INSERT INTO sla_policies (category_id, severity, ack_minutes, resolve_minutes) VALUES (NULL, 'MEDIUM', 240, 2880)");
-        jdbc.update("INSERT INTO sla_policies (category_id, severity, ack_minutes, resolve_minutes) VALUES (NULL, 'CRITICAL', 30, 240)");
+        jdbc.update("INSERT INTO sla_policies (category_id, severity, response_minutes, resolve_minutes) VALUES (NULL, 'HIGH', 120, 720)");
+        jdbc.update("INSERT INTO sla_policies (category_id, severity, response_minutes, resolve_minutes) VALUES (NULL, 'MEDIUM', 240, 2880)");
+        jdbc.update("INSERT INTO sla_policies (category_id, severity, response_minutes, resolve_minutes) VALUES (NULL, 'CRITICAL', 30, 240)");
     }
 
     @Test
