@@ -1,8 +1,8 @@
 import 'dart:convert';
 
+import 'package:fixloop_mobile/data/fake_fix_loop_api.dart';
 import 'package:fixloop_mobile/main.dart';
 import 'package:fixloop_mobile/preview/photo_picker.dart';
-import 'package:fixloop_mobile/preview/preview_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -21,13 +21,28 @@ class FakePhotoPicker implements PreviewPhotoPicker {
   }
 }
 
-Future<void> startApp(WidgetTester tester, {PreviewPhotoPicker? picker}) async {
+Future<void> startApp(
+  WidgetTester tester, {
+  FakeFixLoopApi? api,
+  PreviewPhotoPicker? picker,
+}) async {
   tester.view.physicalSize = const Size(390, 844);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  await tester.pumpWidget(FixLoopApp(photoPicker: picker ?? FakePhotoPicker()));
+  await tester.pumpWidget(
+    FixLoopApp(
+      api: api ?? FakeFixLoopApi(),
+      photoPicker: picker ?? FakePhotoPicker(),
+    ),
+  );
   await tester.pumpAndSettle();
+}
+
+Future<void> signInAs(WidgetTester tester, String email) async {
+  await tester.enterText(find.byKey(const ValueKey<String>('auth-email')), email);
+  await tester.enterText(find.byKey(const ValueKey<String>('auth-password')), 'campus-lamp-2026');
+  await tapVisible(tester, find.byKey(const ValueKey<String>('auth-submit')));
 }
 
 Future<void> tapVisible(WidgetTester tester, Finder finder) async {
@@ -37,170 +52,187 @@ Future<void> tapVisible(WidgetTester tester, Finder finder) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> choose(WidgetTester tester, String key, String choice) async {
-  await tapVisible(tester, find.byKey(ValueKey<String>(key)));
-  await tester.tap(find.text(choice).last);
+Future<void> selectDropdown(WidgetTester tester, String keySubstring, String choiceText) async {
+  final dropdown = find.byWidgetPredicate(
+    (widget) => widget.key is ValueKey<String> && (widget.key! as ValueKey<String>).value.startsWith(keySubstring),
+  );
+  await tapVisible(tester, dropdown);
+  await tester.tap(find.text(choiceText).last);
   await tester.pumpAndSettle();
-}
-
-Future<void> reachDetails(WidgetTester tester) async {
-  await tapVisible(tester, find.text('Report a problem'));
-  await tester.enterText(find.byKey(const ValueKey<String>('category-search')), 'wi-fi');
-  await tester.pumpAndSettle();
-  await tapVisible(tester, find.text('IT & Network'));
-  expect(find.text('Where is it?'), findsOneWidget);
-  await choose(tester, 'block', 'Girls Hostel B');
-  await choose(tester, 'floor-Girls Hostel B', 'Floor 3');
-  await choose(tester, 'room-Girls Hostel B-Floor 3', 'Room 304');
-  await tapVisible(tester, find.text('Next'));
-  expect(find.text('Tell us more'), findsOneWidget);
 }
 
 void main() {
-  testWidgets('home and preserved sign-in are clearly a preview', (tester) async {
+  testWidgets('student sign-in, error feedback, notifications, and sign-out work', (tester) async {
     await startApp(tester);
-    expect(find.text('My issues'), findsOneWidget);
-    expect(find.text('Preview only · Nothing is sent to Fix Loop'), findsOneWidget);
-    expect(find.text('Example · Ready to check'), findsOneWidget);
+    expect(find.text('Welcome back'), findsOneWidget);
 
-    await tapVisible(tester, find.byTooltip('Profile options'));
-    await tapVisible(tester, find.text('Sign-in preview'));
-    expect(find.text('Early preview: sign-in and complaint reporting are not connected yet.'), findsOneWidget);
-    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
-    for (final field in tester.widgetList<TextField>(find.byType(TextField))) {
-      expect(field.enabled, isFalse);
-    }
+    await tester.enterText(find.byKey(const ValueKey<String>('auth-email')), 'student1@bmu.edu.in');
+    await tester.enterText(find.byKey(const ValueKey<String>('auth-password')), 'wrong-password');
+    await tapVisible(tester, find.byKey(const ValueKey<String>('auth-submit')));
+    expect(find.text('Email or password is incorrect.'), findsOneWidget);
+
+    await signInAs(tester, 'student1@bmu.edu.in');
+    expect(find.text('My issues'), findsOneWidget);
+    expect(find.text('Check it'), findsOneWidget);
+
+    // Open Updates tab and mark notification read.
+    await tapVisible(tester, find.text('Updates'));
+    expect(find.text('1 unread update'), findsOneWidget);
+    await tapVisible(tester, find.textContaining('FL-2026-000024'));
+    expect(find.text('# FL-2026-000024'), findsOneWidget);
+
+    await tapVisible(tester, find.byTooltip('Back'));
+    await tapVisible(tester, find.text('Profile'));
+    await tapVisible(tester, find.byKey(const ValueKey<String>('sign-out-button')));
+    expect(find.text('Welcome back'), findsOneWidget);
   });
 
-  testWidgets('report flow validates, previews a local photo, and never claims to send', (tester) async {
+  testWidgets('student registration validates university email and signs in', (tester) async {
+    await startApp(tester);
+    await tapVisible(tester, find.text('Register'));
+    await tester.enterText(find.byKey(const ValueKey<String>('auth-fullname')), 'New Student');
+    await tester.enterText(find.byKey(const ValueKey<String>('auth-email')), 'newbie@gmail.com');
+    await tester.enterText(find.byKey(const ValueKey<String>('auth-password')), 'campus-lamp-2026');
+    await tapVisible(tester, find.byKey(const ValueKey<String>('auth-submit')));
+    expect(find.textContaining('Only university email addresses'), findsOneWidget);
+
+    await tester.enterText(find.byKey(const ValueKey<String>('auth-email')), 'newbie@bmu.edu.in');
+    await tapVisible(tester, find.byKey(const ValueKey<String>('auth-submit')));
+    expect(find.text('My issues'), findsOneWidget);
+  });
+
+  testWidgets('4-step report flow enforces photo policy, dynamic locations, and submits real code', (tester) async {
     final picker = FakePhotoPicker();
     await startApp(tester, picker: picker);
-    await tapVisible(tester, find.text('Report a problem'));
+    await signInAs(tester, 'student1@bmu.edu.in');
+
+    await tapVisible(tester, find.byKey(const ValueKey<String>('start-report')));
     expect(find.text('What is wrong?'), findsOneWidget);
-    await tapVisible(tester, find.text('More categories'));
-    expect(find.text('AC & fans'), findsOneWidget);
-    await tester.enterText(find.byKey(const ValueKey<String>('category-search')), 'wi-fi');
-    await tester.pumpAndSettle();
-    await tapVisible(tester, find.text('IT & Network'));
 
-    final nextButton = find.ancestor(of: find.text('Next'), matching: find.byType(FilledButton));
-    expect(tester.widget<FilledButton>(nextButton).onPressed, isNull);
-    await choose(tester, 'block', 'Girls Hostel B');
-    await choose(tester, 'floor-Girls Hostel B', 'Floor 3');
-    await choose(tester, 'room-Girls Hostel B-Floor 3', 'Room 304');
-    await tapVisible(tester, find.text('Next'));
-    expect(tester.widget<FilledButton>(nextButton).onPressed, isNull);
-    await tapVisible(tester, find.text('High'));
-    await tester.enterText(find.byKey(const ValueKey<String>('issue-description')), 'Wi-Fi keeps dropping');
+    await tester.enterText(find.byKey(const ValueKey<String>('category-search')), 'plumb');
     await tester.pumpAndSettle();
+    await tapVisible(tester, find.text('Plumbing & Water'));
+
+    expect(find.text('Where is it?'), findsOneWidget);
+    await selectDropdown(tester, 'loc-level-0', 'Boys Hostel T1');
+    await selectDropdown(tester, 'loc-level-1', 'Floor 2');
+    await selectDropdown(tester, 'loc-level-2', 'Room 204');
+    await tapVisible(tester, find.text('Next'));
+
+    expect(find.text('Tell us more'), findsOneWidget);
+    expect(find.text('Photos (required · at least 1)'), findsOneWidget);
+
+    final nextBtn = find.ancestor(of: find.text('Next'), matching: find.byType(FilledButton));
+    await tester.enterText(find.byKey(const ValueKey<String>('issue-title')), 'Leaking tap in washroom');
+    await tester.pumpAndSettle();
+    // Photo is required for Plumbing, so Next remains disabled until a photo is added.
+    expect(tester.widget<FilledButton>(nextBtn).onPressed, isNull);
+
     await tapVisible(tester, find.byKey(const ValueKey<String>('add-photo')));
     expect(picker.calls, 1);
-    expect(find.byTooltip('Remove photo 1'), findsOneWidget);
-    await tapVisible(tester, find.text('Next'));
+    expect(tester.widget<FilledButton>(nextBtn).onPressed, isNotNull);
 
+    await tapVisible(tester, find.text('Next'));
     expect(find.text('Check and send'), findsOneWidget);
-    expect(find.text('Girls Hostel B, Floor 3, Room 304'), findsOneWidget);
-    expect(find.text('High · Blocks normal use'), findsOneWidget);
-    expect(find.text('1 selected'), findsOneWidget);
-    await tapVisible(tester, find.text('Preview report'));
-    expect(find.text('Report previewed'), findsOneWidget);
-    expect(find.textContaining('No report was sent.'), findsOneWidget);
-    expect(find.text('# PREVIEW-001'), findsOneWidget);
+    expect(find.text('Boys Hostel T1 · Floor 2 · Room 204'), findsOneWidget);
+
+    await tapVisible(tester, find.byKey(const ValueKey<String>('submit-complaint')));
+    expect(find.text('Report received'), findsOneWidget);
+    expect(find.text('# FL-2026-000027'), findsOneWidget);
+
     await tapVisible(tester, find.text('Done'));
-    expect(find.text('Wi-Fi keeps dropping'), findsOneWidget);
-    expect(find.text('Preview · Received'), findsOneWidget);
+    expect(find.text('Leaking tap in washroom'), findsOneWidget);
   });
 
-  testWidgets('back navigation retains the draft and photo removal is local', (tester) async {
-    await startApp(tester);
-    await reachDetails(tester);
-    await tester.enterText(find.byKey(const ValueKey<String>('issue-description')), 'Example report');
-    await tester.pumpAndSettle();
-    await tapVisible(tester, find.byKey(const ValueKey<String>('add-photo')));
-    await tapVisible(tester, find.byTooltip('Remove photo 1'));
-    expect(find.byTooltip('Remove photo 1'), findsNothing);
-    await tapVisible(tester, find.text('Next'));
-    await tapVisible(tester, find.text('Issue'));
-    expect(find.text('Example report'), findsOneWidget);
-    await tapVisible(tester, find.text('Next'));
-    expect(find.text('0 selected'), findsOneWidget);
-  });
+  testWidgets('student can verify or reopen resolved issue and missing attachment shows clean placeholder', (tester) async {
+    final api = FakeFixLoopApi(missingAttachmentIds: <String>{'att-seeded-1'});
+    await startApp(tester, api: api);
+    await signInAs(tester, 'student1@bmu.edu.in');
 
-  testWidgets('a resolved example can be verified without closing a real issue', (tester) async {
-    await startApp(tester);
     await tapVisible(tester, find.text('Check it'));
-    expect(find.text('Awaiting your confirmation'), findsOneWidget);
-    await tapVisible(tester, find.text('Fixed'));
+    expect(find.text('# FL-2026-000024'), findsOneWidget);
+    expect(find.text('Sample photo unavailable on server'), findsOneWidget);
+
+    // Reopen first (requires note).
+    await tapVisible(tester, find.byKey(const ValueKey<String>('action-reopen')));
+    await tester.enterText(find.byKey(const ValueKey<String>('dialog-note')), 'Drops intermittently again.');
+    await tester.pumpAndSettle();
+    await tapVisible(tester, find.text('Reopen issue'));
+    expect(find.text('Assigned'), findsWidgets);
+  });
+
+  testWidgets('student can verify resolved issue to close the loop', (tester) async {
+    await startApp(tester);
+    await signInAs(tester, 'student1@bmu.edu.in');
+
+    await tapVisible(tester, find.text('Check it'));
+    await tapVisible(tester, find.byKey(const ValueKey<String>('action-verify')));
     expect(find.text('Loop closed.'), findsOneWidget);
-    expect(find.text('Preview only. No real issue was closed.'), findsOneWidget);
-    await tapVisible(tester, find.text('Done'));
-    expect(find.text('Example · Closed'), findsOneWidget);
-  });
-
-  testWidgets('reopening requires a reason and only changes the example', (tester) async {
-    await startApp(tester);
-    await tapVisible(tester, find.text('Check it'));
-    await tapVisible(tester, find.text('Not fixed'));
-    final button = find.ancestor(of: find.text('Preview reopen'), matching: find.byType(FilledButton));
-    expect(tester.widget<FilledButton>(button).onPressed, isNull);
-    await tester.enterText(find.byKey(const ValueKey<String>('reopen-reason')), 'Still not working');
-    await tester.pumpAndSettle();
-    await tapVisible(tester, find.text('Preview reopen'));
-    expect(find.text('Example · Reopened'), findsOneWidget);
-    expect(find.text('Preview updated. No issue was reopened.'), findsOneWidget);
-  });
-
-  testWidgets('feedback accepts a local image but explicitly sends nothing', (tester) async {
-    final picker = FakePhotoPicker();
-    await startApp(tester, picker: picker);
-    await tapVisible(tester, find.text('Give feedback'));
-    expect(find.text('Tell us what went wrong'), findsOneWidget);
-    await tapVisible(tester, find.text('I have an idea'));
-    await tapVisible(tester, find.byType(Switch));
-    expect(picker.calls, 1);
-    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
-    await tester.enterText(find.byKey(const ValueKey<String>('feedback-message')), 'Example suggestion');
-    await tester.pumpAndSettle();
-    await tapVisible(tester, find.text('Preview send'));
-    expect(find.text('No message or screenshot was sent. Feedback is not connected yet.'), findsOneWidget);
     await tapVisible(tester, find.text('Done'));
     expect(find.text('My issues'), findsOneWidget);
   });
 
-  testWidgets('oversize images are rejected without leaving the preview', (tester) async {
+  testWidgets('staff queue claims, adds note, resolves, and views analytics', (tester) async {
+    await startApp(tester);
+    await signInAs(tester, 'tech.fac@bmu.edu.in');
+    expect(find.text('Operations queue'), findsOneWidget);
+
+    await tapVisible(tester, find.text('Department pool'));
+    await tapVisible(tester, find.text('Streetlight flickering at Main Gate'));
+    await tapVisible(tester, find.byKey(const ValueKey<String>('action-claim')));
+    expect(find.text('In progress'), findsWidgets);
+
+    await tester.enterText(find.byKey(const ValueKey<String>('add-note-input')), 'Replaced starter fuse.');
+    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const ValueKey<String>('add-note-submit')));
+    expect(find.text('Replaced starter fuse.'), findsOneWidget);
+
+    await tapVisible(tester, find.byKey(const ValueKey<String>('action-resolve')));
+    await tester.enterText(find.byKey(const ValueKey<String>('resolve-note')), 'Fixture verified stable.');
+    await tester.pumpAndSettle();
+    await tapVisible(tester, find.text('Mark resolved').last);
+    expect(find.text('Fixed, please check'), findsWidgets);
+
+    await tapVisible(tester, find.byTooltip('Back'));
+    await tapVisible(tester, find.byIcon(Icons.analytics_outlined));
+    expect(find.text('Operations overview'), findsOneWidget);
+    expect(find.text('Open by department'), findsOneWidget);
+  });
+
+  testWidgets('oversize photo upload shows friendly error', (tester) async {
     await startApp(tester, picker: FakePhotoPicker(tooLarge: true));
-    await reachDetails(tester);
+    await signInAs(tester, 'student1@bmu.edu.in');
+    await tapVisible(tester, find.byKey(const ValueKey<String>('start-report')));
+    await tapVisible(tester, find.text('Wi-Fi & Network'));
+    await selectDropdown(tester, 'loc-level-0', 'Main Gate');
+    await tapVisible(tester, find.text('Next'));
     await tapVisible(tester, find.byKey(const ValueKey<String>('add-photo')));
     expect(find.text('Choose a photo smaller than 5 MB.'), findsOneWidget);
-    expect(find.byTooltip('Remove photo 1'), findsNothing);
   });
 
-  testWidgets('the preview follows the system dark theme', (tester) async {
-    tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
-    addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
-    await startApp(tester);
-    expect(Theme.of(tester.element(find.text('My issues'))).brightness, Brightness.dark);
-    await tapVisible(tester, find.text('Report a problem'));
-    expect(Theme.of(tester.element(find.text('What is wrong?'))).brightness, Brightness.dark);
-  });
-
-  testWidgets('small screens and larger text can scroll without overflow', (tester) async {
+  testWidgets('supports dark mode and small 320px viewport with 1.5x text scale without overflow', (tester) async {
     final previousErrorHandler = FlutterError.onError;
     FlutterError.onError = (details) {
       FlutterError.dumpErrorToConsole(details, forceReport: true);
       previousErrorHandler?.call(details);
     };
     addTearDown(() => FlutterError.onError = previousErrorHandler);
+
+    tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
     tester.view.physicalSize = const Size(320, 700);
     tester.view.devicePixelRatio = 1;
-    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
-    await tester.pumpWidget(FixLoopApp(photoPicker: FakePhotoPicker()));
+
+    await tester.pumpWidget(FixLoopApp(api: FakeFixLoopApi(), photoPicker: FakePhotoPicker()));
     await tester.pumpAndSettle();
-    await tapVisible(tester, find.text('Report a problem'));
-    expect(find.text('What is wrong?'), findsOneWidget);
+    expect(Theme.of(tester.element(find.text('Welcome back'))).brightness, Brightness.dark);
+
+    await signInAs(tester, 'student1@bmu.edu.in');
+    expect(find.text('My issues'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

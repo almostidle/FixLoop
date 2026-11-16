@@ -160,9 +160,13 @@ public class AuthService {
 
     @Transactional(readOnly = true)
     public UserResponse me(UUID userId) {
+        return UserResponse.from(requireActiveUser(userId));
+    }
+
+    @Transactional(readOnly = true)
+    public UserAccount requireActiveUser(UUID userId) {
         return users.findById(userId)
             .filter(UserAccount::active)
-            .map(UserResponse::from)
             .orElseThrow(() -> ApiException.unauthenticated(SESSION_EXPIRED));
     }
 

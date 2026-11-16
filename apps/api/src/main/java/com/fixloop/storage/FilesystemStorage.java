@@ -5,6 +5,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,9 +45,13 @@ public class FilesystemStorage implements StorageBackend {
         log.info("Attachment storage: {} (maximum {} bytes per file)", root, properties.maxBytes());
     }
 
+    public static boolean isValidGeneratedKey(String key) {
+        return key != null && KEY_SHAPE.matcher(key).matches();
+    }
+
     @Override
     public void store(String key, byte[] content) {
-        if (key == null || !KEY_SHAPE.matcher(key).matches()) {
+        if (!isValidGeneratedKey(key)) {
             throw new IllegalArgumentException("Refusing to store an attachment under an unexpected key");
         }
         Path target = root.resolve(key).normalize();
@@ -66,6 +71,24 @@ public class FilesystemStorage implements StorageBackend {
             Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException exception) {
             throw new IllegalStateException("Could not store the attachment", exception);
+        }
+    }
+
+    @Override
+    public Optional<byte[]> load(String key) {
+        // Seeded demo rows may carry synthetic keys that do not match KEY_SHAPE
+        // or do not exist on disk; treat those safely as missing instead of crashing.
+        if (!isValidGeneratedKey(key)) {
+            return Optional.empty();
+        }
+        Path target = root.resolve(key).normalize();
+        if (!target.startsWith(root) || !Files.isRegularFile(target)) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Files.readAllBytes(target));
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not read the attachment", exception);
         }
     }
 }

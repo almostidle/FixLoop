@@ -44,7 +44,7 @@ class HealthControllerTest {
     @Test
     @WithMockUser
     void evenAnAuthenticatedUserCannotAccessUnimplementedDomainPaths() throws Exception {
-        mvc.perform(get("/api/v1/complaints"))
+        mvc.perform(get("/api/v1/unimplemented"))
             .andExpect(status().isForbidden())
             .andExpect(jsonPath("$.code").value("FORBIDDEN"));
     }

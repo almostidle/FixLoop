@@ -1,38 +1,35 @@
 # Fix Loop
 
 A campus complaint and resolution tracker, based on the supplied
-[project bible](docs/bible/Fix_Loop_Project_Bible_v0.2.md). This is an early
-foundation and **must not be used for real reports or real users yet**.
+[project bible](docs/bible/Fix_Loop_Project_Bible_v0.2.md).
 
 ## What exists today
 
-- A Flutter 3.41.9 / Dart 3.11.5 **design preview** based on the supplied
-  [Stitch design](docs/design/stitch-design.md): campus home, the four-step
-  report flow, report confirmation, resolved-issue detail, loop-closed screen,
-  and feedback. The design's light/dark colors, fonts and moon motif are shared.
-- Preview navigation, search, form validation, example issue actions and local
-  image selection. Examples and draft state are in memory; **nothing is sent to
-  the API**. Selected images may be cached temporarily by the operating system
-  or image-picker plugin. Use only synthetic information and images.
-- A Java 21 / Spring Boot 3 API with health checks, Swagger UI, deny-by-default
-  security, and a server-side PostgreSQL JDBC configuration for Supabase.
-- **Its own identity system** (bible D7): registration on college email domains,
-  login, rotating refresh tokens with replay detection, logout, password change,
-  `GET /me`, per-IP rate limiting, and one JSON error shape for the whole API.
-  Staff accounts still have to be inserted by hand.
-- **Photograph upload** for complaints: `POST /api/v1/attachments` accepts JPEG,
-  PNG or WebP, checks the content rather than the filename, and returns a storage
-  key and SHA-256 checksum. There is no download endpoint yet, and uploads are
-  not yet linked to a complaint row.
+- A Flutter 3.41.9 / Dart 3.11.5 **live client** for Web and Android following the
+  supplied [Stitch design](docs/design/stitch-design.md): sign-in and student
+  registration, role-aware home/operations queues (Student, Staff, Supervisor,
+  Admin), four-step guided complaint intake with dynamic-depth cascading
+  locations, similar-issue detection, photograph uploads, full workflow
+  transitions, notes, in-app notifications, and analytics summary cards.
+- A Java 21 / Spring Boot 3 modular monolith API (`JdbcTemplate`, Flyway
+  disabled on normal startup, `sslmode=verify-full` for Supabase Postgres) with:
+  - Identity system (`POST /api/v1/auth/register`, `login`, `refresh`, `logout`,
+    `change-password`, `GET /api/v1/me`) with HS256 JWTs and rotating SHA-256
+    refresh tokens.
+  - Reference directory (`GET /api/v1/categories`, `/locations`,
+    `/departments`, `/users/staff`) with `RESTRICTED` department isolation.
+  - Full complaint lifecycle (`/api/v1/complaints/**`): `Idempotency-Key`
+    deduplication, `complaint_code_seq` code generation (`FL-YYYY-NNNNNN`),
+    priority-ordered `routing_rules` + `sla_policies`, sensitive-category
+    isolation, optimistic locking (`version`), append-only `complaint_events`,
+    and notes.
+  - Photograph uploads and complaint-authorized downloads (`POST /api/v1/attachments`,
+    `GET /api/v1/attachments/{id}/content`), handling missing seeded disk blobs
+    cleanly (`404 ATTACHMENT_FILE_MISSING`).
+  - In-app notifications (`GET /api/v1/notifications`, `POST /api/v1/notifications/{id}/read`)
+    and SQL view-backed analytics (`GET /api/v1/analytics/summary`).
 - Tests and CI using **disposable** PostgreSQL databases. The default Compose
   file no longer creates a local PostgreSQL service.
-
-**Not implemented:** real complaint or feedback endpoints, routing, workflow
-authorization, attachment download, notifications, a Flutter API client, or a
-public deployment. A success screen is a preview, not
-proof of a submission. The API's domain routes remain denied until real
-server-side authentication and authorization exist. Flutter never receives a
-database password or Supabase service-role key.
 
 ## Important: exposed database credential
 
@@ -99,9 +96,21 @@ database. No database password or service-role key belongs in the mobile app.
    - <http://localhost:8080/swagger-ui/index.html> and
      <http://localhost:8080/v3/api-docs> — generated API documentation.
 
-   Change the port in these URLs if you set `API_PORT`. No domain endpoints are
-   open. The API binds to localhost by default; exposing it to a LAN or the
-   internet is inappropriate until auth, HTTPS and CORS are reviewed.
+   Change the port in these URLs if you set `API_PORT`. The API binds to
+   localhost by default; set `ALLOWED_WEB_ORIGINS` (for example
+   `http://localhost:3000,http://127.0.0.1:3000`) when running the Flutter Web
+   client locally.
+
+### Running the Flutter client against the API
+
+In `apps/mobile`, set `ALLOWED_WEB_ORIGINS=http://localhost:3000,http://127.0.0.1:3000`
+in your API environment, then start Flutter Web or Android pointing at the API:
+
+```sh
+cd apps/mobile
+flutter pub get
+flutter run -d chrome --web-port 3000 --dart-define=API_BASE_URL=http://localhost:8080
+```
 
 For a Java process **outside Docker**, set `DATABASE_URL`, `DATABASE_USER`,
 `DATABASE_PASSWORD` and `DATABASE_SSL_ROOT_CERT` (the absolute path to the

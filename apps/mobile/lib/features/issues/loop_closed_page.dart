@@ -28,7 +28,7 @@ class LoopClosedPage extends StatelessWidget {
             Text('Loop closed.', style: text.displaySmall, textAlign: TextAlign.center),
             const SizedBox(height: 8),
             Text(
-              'Preview only. No real issue was closed.',
+              'Thank you for confirming the repair. This issue is now verified and closed.',
               style: text.bodyLarge?.copyWith(color: colors.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
@@ -43,7 +43,7 @@ class LoopClosedPage extends StatelessWidget {
                 child: Text('# $code', style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
               ),
             ),
-            const SizedBox(height: 72),
+            const SizedBox(height: 56),
             PrimaryAction(label: 'Done', onPressed: () => _done(context)),
           ],
         ),
