@@ -1,41 +1,107 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
+import '../../data/fix_loop_api.dart';
+import '../../data/models.dart';
 import '../../design/widgets.dart';
 import '../../preview/photo_picker.dart';
-import '../../preview/preview_models.dart';
+import '../../state/app_controller.dart';
 
+class _UploadedPhoto {
+  const _UploadedPhoto({required this.bytes, required this.uploaded});
+  final Uint8List bytes;
+  final UploadedAttachment uploaded;
+}
+
+/// Four-step guided complaint submission backed by live categories, dynamic-depth
+/// locations, similarity lookup, real photo uploads, and idempotent submission.
 class ReportFlowPage extends StatefulWidget {
   const ReportFlowPage({
+    required this.controller,
     required this.photoPicker,
-    required this.onPreviewReport,
+    required this.onSubmitted,
     super.key,
   });
 
+  final AppController controller;
   final PreviewPhotoPicker photoPicker;
-  final PreviewIssue Function(ReportDraft draft) onPreviewReport;
+  final ValueChanged<ComplaintDetail> onSubmitted;
 
   @override
   State<ReportFlowPage> createState() => _ReportFlowPageState();
 }
 
 class _ReportFlowPageState extends State<ReportFlowPage> {
-  final ReportDraft _draft = ReportDraft();
-  final TextEditingController _search = TextEditingController();
-  final TextEditingController _description = TextEditingController();
-  int _step = 0;
-  bool _showMore = false;
-  bool _pickingPhoto = false;
-  PreviewIssue? _previewedIssue;
+  final TextEditingController _categorySearch = TextEditingController();
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
+  late final String _idempotencyKey;
 
-  static const _blocks = <String>['Girls Hostel B', 'Boys Hostel A', 'Academic Block', 'Library'];
-  static const _floors = <String>['Ground floor', 'Floor 1', 'Floor 2', 'Floor 3', 'Floor 4'];
-  static const _rooms = <String>['Room 301', 'Room 302', 'Room 304', 'Common area'];
+  int _step = 0;
+  bool _showAllCategories = false;
+
+  CategoryModel? _category;
+  final List<LocationModel> _selectedLocationLevels = <LocationModel>[];
+  ComplaintSeverity _severity = ComplaintSeverity.medium;
+  final List<_UploadedPhoto> _photos = <_UploadedPhoto>[];
+
+  SimilarComplaints? _similar;
+  bool _loadingSimilar = false;
+  bool _uploadingPhoto = false;
+  bool _submitting = false;
+  ComplaintDetail? _created;
+
+  @override
+  void initState() {
+    super.initState();
+    _idempotencyKey = 'fl-${DateTime.now().microsecondsSinceEpoch}';
+  }
 
   @override
   void dispose() {
-    _search.dispose();
-    _description.dispose();
+    _categorySearch.dispose();
+    _titleController.dispose();
+    _descriptionController.dispose();
     super.dispose();
+  }
+
+  FixLoopApi get _api => widget.controller.api;
+  List<LocationModel> get _allLocations => widget.controller.locations;
+
+  List<LocationModel> _childrenOf(String? parentId) =>
+      _allLocations.where((loc) => loc.parentId == parentId).toList();
+
+  List<LocationModel> _levelChoices(int level) {
+    if (level == 0) {
+      final roots = _allLocations.where((loc) => loc.parentId == null).toList();
+      if (roots.length == 1) {
+        final underRoot = _childrenOf(roots.first.id);
+        if (underRoot.isNotEmpty) return underRoot;
+      }
+      return roots;
+    }
+    if (level - 1 >= _selectedLocationLevels.length) return const <LocationModel>[];
+    return _childrenOf(_selectedLocationLevels[level - 1].id);
+  }
+
+  LocationModel? get _selectedLeafLocation {
+    if (_selectedLocationLevels.isEmpty) return null;
+    final last = _selectedLocationLevels.last;
+    if (_childrenOf(last.id).isNotEmpty) return null;
+    return last;
+  }
+
+  String get _locationDisplay {
+    if (_selectedLocationLevels.isEmpty) return '';
+    return _selectedLocationLevels.map((l) => l.name).join(' · ');
+  }
+
+  bool get _hasValidDetails {
+    final titleLen = _titleController.text.trim().length;
+    if (titleLen < 5 || titleLen > 120) return false;
+    if (_category?.photoPolicy == 'REQUIRED' && _photos.isEmpty) return false;
+    return true;
   }
 
   void _back() {
@@ -47,40 +113,138 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
   }
 
   void _next() {
-    if (_step == 1 && _draft.hasLocation || _step == 2 && _draft.hasDescription) {
-      setState(() => _step++);
+    if (_step == 1 && _selectedLeafLocation != null) {
+      setState(() => _step = 2);
+    } else if (_step == 2 && _hasValidDetails) {
+      setState(() => _step = 3);
     }
   }
 
-  void _previewSubmit() {
-    if (_draft.category == null || !_draft.hasLocation || !_draft.hasDescription) return;
-    final issue = widget.onPreviewReport(_draft);
+  Future<void> _selectCategory(CategoryModel cat) async {
     setState(() {
-      _previewedIssue = issue;
-      _step = 4;
+      _category = cat;
+      _severity = cat.defaultSeverity;
+      if (cat.photoPolicy == 'DISABLED') {
+        _photos.clear();
+      }
+      _similar = null;
+      _step = 1;
     });
+    final leaf = _selectedLeafLocation;
+    if (leaf != null && !cat.isSensitive) {
+      await _loadSimilar(leaf.id, cat.id);
+    }
   }
 
-  Future<void> _pickPhoto() async {
-    if (_pickingPhoto || _draft.photos.length >= 3) return;
-    setState(() => _pickingPhoto = true);
+  Future<void> _selectLocationAtLevel(int level, String? locationId) async {
+    if (locationId == null) return;
+    final chosen = _allLocations.firstWhere((l) => l.id == locationId);
+    setState(() {
+      _selectedLocationLevels.removeRange(level, _selectedLocationLevels.length);
+      _selectedLocationLevels.add(chosen);
+      _similar = null;
+    });
+
+    final leaf = _selectedLeafLocation;
+    final cat = _category;
+    if (leaf != null && cat != null && !cat.isSensitive) {
+      await _loadSimilar(leaf.id, cat.id);
+    }
+  }
+
+  Future<void> _loadSimilar(String locationId, String categoryId) async {
+    setState(() => _loadingSimilar = true);
     try {
-      final photo = await widget.photoPicker.pickPhoto();
+      final result = await _api.findSimilar(locationId: locationId, categoryId: categoryId);
+      if (mounted) setState(() => _similar = result);
+    } catch (_) {
+      // Non-blocking hint; ignore errors silently.
+    } finally {
+      if (mounted) setState(() => _loadingSimilar = false);
+    }
+  }
+
+  Future<void> _pickAndUploadPhoto() async {
+    if (_uploadingPhoto || _photos.length >= 5) return;
+    setState(() => _uploadingPhoto = true);
+    try {
+      final picked = await widget.photoPicker.pickPhoto();
+      if (!mounted || picked == null) return;
+      final mime = _detectMime(picked.bytes);
+      final ext = mime == 'image/png' ? 'png' : (mime == 'image/webp' ? 'webp' : 'jpg');
+      final uploaded = await _api.uploadAttachment(
+        bytes: picked.bytes,
+        filename: 'issue-photo.$ext',
+        mimeType: mime,
+      );
       if (!mounted) return;
-      if (photo != null) setState(() => _draft.photos.add(photo));
+      setState(() => _photos.add(_UploadedPhoto(bytes: picked.bytes, uploaded: uploaded)));
     } on PhotoTooLargeException {
       if (mounted) _showMessage('Choose a photo smaller than 5 MB.');
+    } on ApiException catch (e) {
+      if (mounted) _showMessage(e.message);
     } catch (_) {
-      if (mounted) _showMessage('Could not open photos on this device.');
+      if (mounted) _showMessage('Could not upload photo right now.');
     } finally {
-      if (mounted) setState(() => _pickingPhoto = false);
+      if (mounted) setState(() => _uploadingPhoto = false);
     }
   }
 
-  void _showMessage(String message) {
+  Future<void> _submitComplaint() async {
+    final cat = _category;
+    final loc = _selectedLeafLocation;
+    if (cat == null || loc == null || !_hasValidDetails || _submitting) return;
+
+    setState(() => _submitting = true);
+    try {
+      final created = await _api.createComplaint(
+        categoryId: cat.id,
+        locationId: loc.id,
+        title: _titleController.text.trim(),
+        description: _descriptionController.text.trim(),
+        severity: _severity,
+        attachmentKeys: _photos.map((p) => p.uploaded.storageKey).toList(),
+        idempotencyKey: _idempotencyKey,
+      );
+      if (!mounted) return;
+      widget.onSubmitted(created);
+      setState(() {
+        _created = created;
+        _step = 4;
+      });
+    } on ApiException catch (e) {
+      if (mounted) _showMessage(e.message);
+    } catch (_) {
+      if (mounted) _showMessage('Could not submit report. Please try again.');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  void _showMessage(String text) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  static String _detectMime(Uint8List bytes) {
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47) {
+      return 'image/png';
+    }
+    if (bytes.length >= 12 &&
+        bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45) {
+      return 'image/webp';
+    }
+    return 'image/jpeg';
   }
 
   @override
@@ -94,8 +258,8 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
       child: FixScreen(
         title: 'Report issue',
         onBack: _back,
-        child: isSuccess
-            ? _ReportPreviewSuccess(issue: _previewedIssue!, onDone: _back)
+        child: isSuccess && _created != null
+            ? _ReportSuccessView(complaint: _created!, onDone: _back)
             : Column(
                 children: <Widget>[
                   Padding(
@@ -105,7 +269,7 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
                   Expanded(
                     child: SingleChildScrollView(
                       key: ValueKey<int>(_step),
-                      padding: const EdgeInsets.fromLTRB(24, 26, 24, 24),
+                      padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
                       child: switch (_step) {
                         0 => _categoryStep(),
                         1 => _locationStep(),
@@ -128,13 +292,13 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
   Widget _categoryStep() {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final query = _search.text.trim().toLowerCase();
-    final visible = previewCategories.where((category) {
+    final all = widget.controller.categories;
+    final query = _categorySearch.text.trim().toLowerCase();
+    final filtered = all.where((cat) {
       if (query.isNotEmpty) {
-        return category.name.toLowerCase().contains(query) ||
-            category.description.toLowerCase().contains(query);
+        return cat.name.toLowerCase().contains(query) || cat.theme.toLowerCase().contains(query);
       }
-      return _showMore || previewCategories.indexOf(category) < 6;
+      return _showAllCategories || all.indexOf(cat) < 6;
     }).toList();
 
     return Column(
@@ -143,13 +307,13 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
         Text('What is wrong?', style: text.displaySmall),
         const SizedBox(height: 8),
         Text(
-          'Select an issue area to start your campus repair loop.',
+          'Select an issue category to start your campus repair loop.',
           style: text.bodyLarge?.copyWith(color: colors.onSurfaceVariant),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
         TextField(
           key: const ValueKey<String>('category-search'),
-          controller: _search,
+          controller: _categorySearch,
           onChanged: (_) => setState(() {}),
           decoration: InputDecoration(
             hintText: 'Search categories',
@@ -158,16 +322,19 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
                 ? null
                 : IconButton(
                     tooltip: 'Clear search',
-                    onPressed: () => setState(_search.clear),
+                    onPressed: () => setState(_categorySearch.clear),
                     icon: const Icon(Icons.close_rounded),
                   ),
           ),
         ),
-        const SizedBox(height: 20),
-        if (visible.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
-            child: Text('No categories found. Try a different search.'),
+        const SizedBox(height: 18),
+        if (filtered.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Text(
+              all.isEmpty ? 'Categories are loading or unavailable.' : 'No matching categories found.',
+              style: text.bodyLarge?.copyWith(color: colors.onSurfaceVariant),
+            ),
           )
         else
           LayoutBuilder(
@@ -175,57 +342,32 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
               final columns = constraints.maxWidth < 310 ? 1 : 2;
               final itemWidth = (constraints.maxWidth - (columns - 1) * 8) / columns;
               final textScale = MediaQuery.textScalerOf(context).scale(16) / 16;
-              final itemHeight = 76.0 * textScale.clamp(1.0, 2.5);
+              final itemHeight = 84.0 * textScale.clamp(1.0, 2.5);
               return Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: <Widget>[
-                  for (final category in visible)
+                  for (final category in filtered)
                     SizedBox(
                       width: itemWidth,
                       height: itemHeight,
                       child: _CategoryTile(
                         category: category,
-                        onTap: () => setState(() {
-                          _draft.category = category;
-                          _step = 1;
-                        }),
+                        onTap: () => _selectCategory(category),
                       ),
                     ),
                 ],
               );
             },
           ),
-        if (query.isEmpty) ...<Widget>[
+        if (query.isEmpty && all.length > 6) ...<Widget>[
           const SizedBox(height: 10),
           TextButton.icon(
-            onPressed: () => setState(() => _showMore = !_showMore),
-            icon: Icon(_showMore ? Icons.expand_less_rounded : Icons.expand_more_rounded),
-            label: Text(_showMore ? 'Fewer categories' : 'More categories'),
+            onPressed: () => setState(() => _showAllCategories = !_showAllCategories),
+            icon: Icon(_showAllCategories ? Icons.expand_less_rounded : Icons.expand_more_rounded),
+            label: Text(_showAllCategories ? 'Fewer categories' : 'More categories'),
           ),
         ],
-        const SizedBox(height: 22),
-        const Divider(),
-        const SizedBox(height: 12),
-        Material(
-          color: colors.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(18),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: colors.surfaceContainer,
-              child: Icon(Icons.lock_outline_rounded, color: colors.primary),
-            ),
-            title: const Text('Private reports'),
-            subtitle: const Text('Not available in this preview'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => _showMessage('Private reporting is not implemented yet.'),
-          ),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          'Use examples only; do not enter real or sensitive information.',
-          style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
-        ),
       ],
     );
   }
@@ -233,90 +375,99 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
   Widget _locationStep() {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+
+    // Build dynamic depth dropdowns until selected leaf has no children.
+    final dropdowns = <Widget>[];
+    final maxPossibleLevels = _selectedLocationLevels.length + 1;
+    for (var level = 0; level < maxPossibleLevels; level++) {
+      final choices = _levelChoices(level);
+      if (choices.isEmpty) break;
+
+      final selected = level < _selectedLocationLevels.length ? _selectedLocationLevels[level] : null;
+      final label = _labelForChoices(choices, level);
+      final icon = _iconForChoices(choices);
+
+      dropdowns.add(
+        Padding(
+          padding: EdgeInsets.only(bottom: level + 1 < maxPossibleLevels ? 16 : 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.only(left: 4, bottom: 7),
+                child: Text(label, style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
+              ),
+              DropdownButtonFormField<String>(
+                key: ValueKey<String>(
+                  'loc-level-$level-${level == 0 ? 'root' : _selectedLocationLevels[level - 1].id}',
+                ),
+                initialValue: selected?.id,
+                isExpanded: true,
+                decoration: InputDecoration(prefixIcon: Icon(icon)),
+                hint: Text('Select ${label.toLowerCase()}'),
+                items: choices
+                    .map(
+                      (loc) => DropdownMenuItem<String>(
+                        key: ValueKey<String>('loc-opt-${loc.id}'),
+                        value: loc.id,
+                        child: Text(loc.name, overflow: TextOverflow.ellipsis),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) => _selectLocationAtLevel(level, value),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Text('Where is it?', style: text.displaySmall),
         const SizedBox(height: 8),
-        Text('Tell us the exact spot on campus.', style: text.bodyLarge?.copyWith(color: colors.onSurfaceVariant)),
-        const SizedBox(height: 28),
-        _locationDropdown(
-          label: 'Campus block',
-          icon: Icons.apartment_rounded,
-          value: _draft.block,
-          choices: _blocks,
-          stateKey: 'block',
-          onChanged: (value) => setState(() {
-            _draft.block = value;
-            _draft.floor = null;
-            _draft.room = null;
-          }),
+        Text(
+          'Select the exact spot on campus.',
+          style: text.bodyLarge?.copyWith(color: colors.onSurfaceVariant),
         ),
-        const SizedBox(height: 18),
-        _locationDropdown(
-          label: 'Floor level',
-          icon: Icons.layers_outlined,
-          value: _draft.floor,
-          choices: _floors,
-          stateKey: 'floor-${_draft.block}',
-          onChanged: _draft.block == null
-              ? null
-              : (value) => setState(() {
-                    _draft.floor = value;
-                    _draft.room = null;
-                  }),
-        ),
-        const SizedBox(height: 18),
-        _locationDropdown(
-          label: 'Specific room or zone',
-          icon: Icons.meeting_room_outlined,
-          value: _draft.room,
-          choices: _rooms,
-          stateKey: 'room-${_draft.block}-${_draft.floor}',
-          onChanged: _draft.floor == null ? null : (value) => setState(() => _draft.room = value),
-        ),
-        const SizedBox(height: 20),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Icon(Icons.info_outline_rounded, color: colors.primary, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'These are sample locations, not live campus data.',
-                style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
-              ),
+        const SizedBox(height: 24),
+        if (dropdowns.isEmpty)
+          const Text('Locations are unavailable right now.')
+        else
+          ...dropdowns,
+        if (_loadingSimilar) ...<Widget>[
+          const SizedBox(height: 18),
+          const LinearProgressIndicator(),
+        ],
+        if (_similar != null && _similar!.count > 0) ...<Widget>[
+          const SizedBox(height: 18),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: colors.primaryContainer,
+              borderRadius: BorderRadius.circular(16),
             ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _locationDropdown({
-    required String label,
-    required IconData icon,
-    required String? value,
-    required List<String> choices,
-    required String stateKey,
-    required ValueChanged<String?>? onChanged,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 7),
-          child: Text(label, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
-        ),
-        DropdownButtonFormField<String>(
-          key: ValueKey<String>(stateKey),
-          initialValue: value,
-          isExpanded: true,
-          decoration: InputDecoration(prefixIcon: Icon(icon)),
-          hint: Text('Select ${label.toLowerCase()}'),
-          items: choices.map((choice) => DropdownMenuItem<String>(value: choice, child: Text(choice))).toList(),
-          onChanged: onChanged,
-        ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Icon(Icons.info_outline_rounded, color: colors.onPrimaryContainer, size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '${_similar!.count} open similar issue${_similar!.count == 1 ? '' : 's'} '
+                    'already reported here (${_similar!.mostCommonStatus ?? 'OPEN'}). '
+                    'You can still submit if yours is separate.',
+                    style: text.bodyMedium?.copyWith(
+                      color: colors.onPrimaryContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -324,94 +475,148 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
   Widget _detailsStep() {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+    final policy = _category?.photoPolicy ?? 'OPTIONAL';
+    final isPhotoDisabled = policy == 'DISABLED';
+    final isPhotoRequired = policy == 'REQUIRED';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Text('Tell us more', style: text.displaySmall),
-        const SizedBox(height: 22),
+        const SizedBox(height: 20),
         Text('Severity', style: text.titleMedium),
         const SizedBox(height: 10),
         Wrap(
           spacing: 6,
           runSpacing: 6,
           children: <Widget>[
-            for (final severity in PreviewSeverity.values)
+            for (final severity in ComplaintSeverity.values)
               ChoiceChip(
                 label: Text(severity.label),
-                selected: _draft.severity == severity,
+                selected: _severity == severity,
                 showCheckmark: false,
                 selectedColor: colors.primary,
                 backgroundColor: colors.surfaceContainerHigh,
                 side: BorderSide.none,
                 labelStyle: TextStyle(
-                  color: _draft.severity == severity ? colors.onPrimary : colors.onSurface,
+                  color: _severity == severity ? colors.onPrimary : colors.onSurface,
                   fontWeight: FontWeight.w700,
                 ),
-                onSelected: (_) => setState(() => _draft.severity = severity),
+                onSelected: (_) => setState(() => _severity = severity),
               ),
           ],
         ),
-        const SizedBox(height: 8),
-        Text(_draft.severity.description, style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
-        const SizedBox(height: 24),
+        const SizedBox(height: 6),
+        Text(_severity.description, style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
+        const SizedBox(height: 20),
+        TextField(
+          key: const ValueKey<String>('issue-title'),
+          controller: _titleController,
+          maxLength: 120,
+          textInputAction: TextInputAction.next,
+          onChanged: (_) => setState(() {}),
+          decoration: const InputDecoration(
+            labelText: 'Short summary',
+            hintText: 'e.g. Ceiling leak above study desk',
+            helperText: 'At least 5 characters',
+          ),
+        ),
+        const SizedBox(height: 14),
         TextField(
           key: const ValueKey<String>('issue-description'),
-          controller: _description,
-          minLines: 4,
+          controller: _descriptionController,
+          minLines: 3,
           maxLines: 6,
           maxLength: 2000,
-          onChanged: (value) => setState(() => _draft.description = value),
+          onChanged: (_) => setState(() {}),
           decoration: const InputDecoration(
-            labelText: 'What happened?',
-            hintText: 'Describe the example issue',
+            labelText: 'Details (optional)',
+            hintText: 'Share room landmarks, timing, or extra context',
             alignLabelWithHint: true,
           ),
         ),
-        const SizedBox(height: 12),
-        Text('Photos (optional)', style: text.titleMedium),
-        const SizedBox(height: 5),
+        const SizedBox(height: 14),
         Text(
-          'Up to 3 images, 5 MB each. Selected for preview only.',
-          style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+          isPhotoDisabled
+              ? 'Photos disabled'
+              : (isPhotoRequired ? 'Photos (required · at least 1)' : 'Photos (optional)'),
+          style: text.titleMedium,
         ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: <Widget>[
-            for (var index = 0; index < _draft.photos.length; index++)
-              _PhotoThumbnail(
-                photo: _draft.photos[index],
-                onRemove: () => setState(() => _draft.photos.removeAt(index)),
-                index: index,
-              ),
-            if (_draft.photos.length < 3)
-              Tooltip(
-                message: 'Add photo',
-                child: Material(
-                  color: colors.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(14),
-                  child: InkWell(
-                    key: const ValueKey<String>('add-photo'),
+        const SizedBox(height: 6),
+        if (isPhotoDisabled)
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: colors.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: <Widget>[
+                Icon(Icons.lock_outline_rounded, size: 18, color: colors.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Photographs are disabled for confidential/sensitive categories.',
+                    style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+          )
+        else ...<Widget>[
+          Text(
+            'Up to 5 images, 5 MB each. Uploaded securely for maintenance staff.',
+            style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: <Widget>[
+              for (var index = 0; index < _photos.length; index++)
+                _PhotoThumbnail(
+                  bytes: _photos[index].bytes,
+                  index: index,
+                  onRemove: () => setState(() => _photos.removeAt(index)),
+                ),
+              if (_photos.length < 5)
+                Tooltip(
+                  message: 'Add photo',
+                  child: Material(
+                    color: colors.surfaceContainerLow,
                     borderRadius: BorderRadius.circular(14),
-                    onTap: _pickingPhoto ? null : _pickPhoto,
-                    child: SizedBox(
-                      width: 92,
-                      height: 92,
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: <Widget>[
-                          Icon(Icons.add_a_photo_outlined, color: colors.primary),
-                          const SizedBox(height: 6),
-                          Text('Add photo', style: text.bodyMedium?.copyWith(color: colors.primary)),
-                        ],
+                    child: InkWell(
+                      key: const ValueKey<String>('add-photo'),
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: _uploadingPhoto ? null : _pickAndUploadPhoto,
+                      child: SizedBox(
+                        width: 96,
+                        height: 96,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: <Widget>[
+                            if (_uploadingPhoto)
+                              const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            else
+                              Icon(Icons.add_a_photo_outlined, color: colors.primary),
+                            const SizedBox(height: 6),
+                            Text(
+                              _uploadingPhoto ? 'Uploading' : 'Add photo',
+                              style: text.bodyMedium?.copyWith(color: colors.primary),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-          ],
-        ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -423,27 +628,45 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Text('Check and send', style: text.displaySmall),
-        const SizedBox(height: 22),
-        _ReviewRow(label: 'Category', value: _draft.category!.name, onEdit: () => setState(() => _step = 0)),
-        _ReviewRow(label: 'Place', value: _draft.place, onEdit: () => setState(() => _step = 1)),
+        const SizedBox(height: 20),
+        _ReviewRow(
+          label: 'Category',
+          value: _category!.name,
+          onEdit: () => setState(() => _step = 0),
+        ),
+        _ReviewRow(
+          label: 'Place',
+          value: _locationDisplay,
+          onEdit: () => setState(() => _step = 1),
+        ),
         _ReviewRow(
           label: 'Severity',
-          value: '${_draft.severity.label} · ${_draft.severity.description}',
+          value: '${_severity.label} · ${_severity.description}',
           onEdit: () => setState(() => _step = 2),
         ),
-        _ReviewRow(label: 'Issue', value: _draft.description.trim(), onEdit: () => setState(() => _step = 2)),
+        _ReviewRow(
+          label: 'Summary',
+          value: _titleController.text.trim(),
+          onEdit: () => setState(() => _step = 2),
+        ),
+        if (_descriptionController.text.trim().isNotEmpty)
+          _ReviewRow(
+            label: 'Details',
+            value: _descriptionController.text.trim(),
+            onEdit: () => setState(() => _step = 2),
+          ),
         _ReviewRow(
           label: 'Photos',
-          value: '${_draft.photos.length} selected',
+          value: _category!.photoPolicy == 'DISABLED' ? 'Disabled' : '${_photos.length} uploaded',
           onEdit: () => setState(() => _step = 2),
         ),
-        if (_draft.photos.isNotEmpty) ...<Widget>[
+        if (_photos.isNotEmpty) ...<Widget>[
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: <Widget>[
-              for (final photo in _draft.photos)
+              for (final photo in _photos)
                 ClipRRect(
                   borderRadius: BorderRadius.circular(8),
                   child: Image.memory(
@@ -451,13 +674,14 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
                     width: 58,
                     height: 58,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, _, _) => const SizedBox(width: 58, height: 58, child: Icon(Icons.broken_image_outlined)),
+                    errorBuilder: (_, _, _) =>
+                        const SizedBox(width: 58, height: 58, child: Icon(Icons.broken_image_outlined)),
                   ),
                 ),
             ],
           ),
         ],
-        const SizedBox(height: 28),
+        const SizedBox(height: 24),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
@@ -465,7 +689,10 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
             const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Privacy and submission are not implemented yet. Do not enter real information.',
+                _category!.isSensitive
+                    ? 'Sensitive report: routed exclusively to the restricted committee. '
+                        'Hidden from campus peers and unrelated departments.'
+                    : 'Your identity stays hidden from peers and service technicians.',
                 style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
               ),
             ),
@@ -476,21 +703,60 @@ class _ReportFlowPageState extends State<ReportFlowPage> {
   }
 
   Widget _bottomAction() => switch (_step) {
-        1 => PrimaryAction(label: 'Next', icon: Icons.arrow_forward_rounded, onPressed: _draft.hasLocation ? _next : null),
-        2 => PrimaryAction(label: 'Next', icon: Icons.arrow_forward_rounded, onPressed: _draft.hasDescription ? _next : null),
-        _ => PrimaryAction(label: 'Preview report', icon: Icons.arrow_forward_rounded, onPressed: _previewSubmit),
+        1 => PrimaryAction(
+            label: 'Next',
+            icon: Icons.arrow_forward_rounded,
+            onPressed: _selectedLeafLocation != null ? _next : null,
+          ),
+        2 => PrimaryAction(
+            label: 'Next',
+            icon: Icons.arrow_forward_rounded,
+            onPressed: _hasValidDetails ? _next : null,
+          ),
+        _ => PrimaryAction(
+            key: const ValueKey<String>('submit-complaint'),
+            label: 'Submit report',
+            icon: Icons.send_rounded,
+            busy: _submitting,
+            onPressed: _submitComplaint,
+          ),
       };
+
+  static String _labelForChoices(List<LocationModel> choices, int level) {
+    final firstType = choices.first.type.toUpperCase();
+    return switch (firstType) {
+      'CAMPUS' => 'Campus',
+      'BLOCK' => 'Campus block or building',
+      'FLOOR' => 'Floor level',
+      'ROOM' => 'Room or space',
+      'AREA' => 'Campus area',
+      _ => level == 0 ? 'Area or building' : 'Specific spot',
+    };
+  }
+
+  static IconData _iconForChoices(List<LocationModel> choices) {
+    final firstType = choices.first.type.toUpperCase();
+    return switch (firstType) {
+      'BLOCK' => Icons.apartment_rounded,
+      'FLOOR' => Icons.layers_outlined,
+      'ROOM' => Icons.meeting_room_outlined,
+      _ => Icons.place_outlined,
+    };
+  }
 }
 
 class _CategoryTile extends StatelessWidget {
   const _CategoryTile({required this.category, required this.onTap});
-  final IssueCategory category;
+  final CategoryModel category;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+    final badgeText = category.isSensitive
+        ? 'Restricted · Private'
+        : (category.photoPolicy == 'REQUIRED' ? 'Photo required' : category.defaultSeverity.label);
     return Material(
       color: colors.surfaceContainer,
       borderRadius: BorderRadius.circular(14),
@@ -519,10 +785,12 @@ class _CategoryTile extends StatelessWidget {
                       style: text.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     Text(
-                      category.description,
+                      badgeText,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+                      style: text.bodyMedium?.copyWith(
+                        color: category.isSensitive ? colors.error : colors.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -536,23 +804,23 @@ class _CategoryTile extends StatelessWidget {
 }
 
 class _PhotoThumbnail extends StatelessWidget {
-  const _PhotoThumbnail({required this.photo, required this.onRemove, required this.index});
-  final PreviewPhoto photo;
+  const _PhotoThumbnail({required this.bytes, required this.onRemove, required this.index});
+  final Uint8List bytes;
   final VoidCallback onRemove;
   final int index;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 92,
-      height: 92,
+      width: 96,
+      height: 96,
       child: Stack(
         fit: StackFit.expand,
         children: <Widget>[
           ClipRRect(
             borderRadius: BorderRadius.circular(14),
             child: Image.memory(
-              photo.bytes,
+              bytes,
               fit: BoxFit.cover,
               errorBuilder: (_, _, _) => const ColoredBox(
                 color: Colors.black12,
@@ -591,13 +859,22 @@ class _ReviewRow extends StatelessWidget {
           onTap: onEdit,
           borderRadius: BorderRadius.circular(8),
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 15),
+            padding: const EdgeInsets.symmetric(vertical: 14),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                SizedBox(width: 76, child: Text(label, style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant))),
+                SizedBox(
+                  width: 78,
+                  child: Text(label, style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
+                ),
                 const SizedBox(width: 8),
-                Expanded(child: Text(value, textAlign: TextAlign.right, style: text.bodyLarge?.copyWith(fontWeight: FontWeight.w700))),
+                Expanded(
+                  child: Text(
+                    value,
+                    textAlign: TextAlign.right,
+                    style: text.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
                 const SizedBox(width: 6),
                 Icon(Icons.edit_outlined, size: 18, color: colors.primary),
               ],
@@ -610,9 +887,9 @@ class _ReviewRow extends StatelessWidget {
   }
 }
 
-class _ReportPreviewSuccess extends StatelessWidget {
-  const _ReportPreviewSuccess({required this.issue, required this.onDone});
-  final PreviewIssue issue;
+class _ReportSuccessView extends StatelessWidget {
+  const _ReportSuccessView({required this.complaint, required this.onDone});
+  final ComplaintDetail complaint;
   final VoidCallback onDone;
 
   @override
@@ -629,14 +906,14 @@ class _ReportPreviewSuccess extends StatelessWidget {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
-                const MoonGraphic(phase: MoonPhase.crescent, size: 150, orbit: true),
-                StatusBadge(status: issue.status),
+                const MoonGraphic(phase: MoonPhase.crescent, size: 144, orbit: true),
+                StatusBadge(status: complaint.status),
               ],
             ),
           ),
-          const SizedBox(height: 30),
-          Text('Report previewed', style: text.displaySmall, textAlign: TextAlign.center),
-          const SizedBox(height: 16),
+          const SizedBox(height: 26),
+          Text('Report received', style: text.displaySmall, textAlign: TextAlign.center),
+          const SizedBox(height: 14),
           Center(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -644,23 +921,19 @@ class _ReportPreviewSuccess extends StatelessWidget {
                 color: colors.surfaceContainer,
                 borderRadius: BorderRadius.circular(100),
               ),
-              child: Text('# ${issue.code}', style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
+              child: Text('# ${complaint.code}', style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 18),
           Text(
-            'No report was sent. This preview clears when you close the app.',
+            complaint.departmentName != null
+                ? 'Automatically routed to ${complaint.departmentName}. You can follow updates right from your home screen.'
+                : 'Queued for supervisor triage. You will be notified as soon as a team picks it up.',
             style: text.bodyLarge?.copyWith(color: colors.onSurfaceVariant),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 36),
           PrimaryAction(label: 'Done', onPressed: onDone),
-          const SizedBox(height: 6),
-          TextButton.icon(
-            onPressed: onDone,
-            icon: const Icon(Icons.visibility_outlined, size: 19),
-            label: const Text('View preview issues'),
-          ),
         ],
       ),
     );

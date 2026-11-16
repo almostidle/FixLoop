@@ -18,6 +18,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-}
       JWT_ISSUER: ${JWT_ISSUER:-https://fixloop.local}
       ALLOWED_EMAIL_DOMAINS: ${ALLOWED_EMAIL_DOMAINS:-bmu.edu.in}
+      # Example for Flutter Web local dev: http://localhost:3000,http://127.0.0.1:3000
       ALLOWED_WEB_ORIGINS: ${ALLOWED_WEB_ORIGINS:-}
       TRUST_FORWARDED_FOR: ${TRUST_FORWARDED_FOR:-false}
       # Never false in a deployment: infra/deploy/preflight.sh refuses it.

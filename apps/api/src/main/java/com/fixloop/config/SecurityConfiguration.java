@@ -51,9 +51,11 @@ public class SecurityConfiguration {
 
     private static final String[] AUTHENTICATED_PATHS = {
         "/api/v1/me", "/api/v1/auth/change-password",
-        // Photograph uploads: a signed-in account only. Reads arrive with the
-        // complaint endpoints, where ownership can be checked.
-        "/api/v1/attachments"
+        "/api/v1/categories", "/api/v1/locations", "/api/v1/departments",
+        "/api/v1/complaints/similar",
+        "/api/v1/analytics/summary",
+        "/api/v1/notifications", "/api/v1/notifications/*/read",
+        "/api/v1/attachments", "/api/v1/attachments/*/content"
     };
 
     @Bean
@@ -78,6 +80,11 @@ public class SecurityConfiguration {
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 .requestMatchers(PUBLIC_PATHS).permitAll()
                 .requestMatchers(AUTHENTICATED_PATHS).authenticated()
+                .requestMatchers(HttpMethod.GET, "/api/v1/users/staff").hasAnyRole("SUPERVISOR", "ADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/v1/complaints").hasAnyRole("STUDENT", "ADMIN")
+                .requestMatchers(HttpMethod.GET, "/api/v1/complaints", "/api/v1/complaints/*").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/v1/complaints/*/transition",
+                    "/api/v1/complaints/*/notes").authenticated()
                 .anyRequest().denyAll())
             .oauth2ResourceServer(oauth2 -> oauth2
                 .authenticationEntryPoint(entryPoint)

@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../preview/preview_models.dart';
+import '../data/models.dart';
 import 'fix_loop_theme.dart';
 
 /// Keeps the phone layout readable on larger web and tablet windows too.
@@ -12,7 +12,9 @@ class FixScreen extends StatelessWidget {
     required this.child,
     this.onBack,
     this.headerActions = const <Widget>[],
-    this.showProfile = true,
+    this.bannerMessage,
+    this.onBannerAction,
+    this.bannerActionLabel = 'Retry',
     super.key,
   });
 
@@ -20,18 +22,19 @@ class FixScreen extends StatelessWidget {
   final Widget child;
   final VoidCallback? onBack;
   final List<Widget> headerActions;
-  final bool showProfile;
+  final String? bannerMessage;
+  final VoidCallback? onBannerAction;
+  final String bannerActionLabel;
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     return Scaffold(
       body: SafeArea(
         child: Align(
           alignment: Alignment.topCenter,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
+            constraints: const BoxConstraints(maxWidth: 560),
             child: Column(
               children: <Widget>[
                 Padding(
@@ -54,20 +57,15 @@ class FixScreen extends StatelessWidget {
                         ),
                       ),
                       ...headerActions,
-                      if (showProfile)
-                        IconButton.filled(
-                          tooltip: 'Account information',
-                          onPressed: () => showAccountNotice(context),
-                          style: IconButton.styleFrom(
-                            backgroundColor: colors.primary,
-                            foregroundColor: colors.onPrimary,
-                          ),
-                          icon: const Icon(Icons.person_outline_rounded),
-                        ),
                     ],
                   ),
                 ),
-                const PreviewNotice(),
+                if (bannerMessage != null && bannerMessage!.isNotEmpty)
+                  StatusBanner(
+                    message: bannerMessage!,
+                    onAction: onBannerAction,
+                    actionLabel: bannerActionLabel,
+                  ),
                 Expanded(child: child),
               ],
             ),
@@ -78,29 +76,17 @@ class FixScreen extends StatelessWidget {
   }
 }
 
-void showAccountNotice(BuildContext context) {
-  showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    builder: (context) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Text('Account', style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 12),
-            const Text('Sign-in is not available in this preview.'),
-          ],
-        ),
-      ),
-    ),
-  );
-}
+class StatusBanner extends StatelessWidget {
+  const StatusBanner({
+    required this.message,
+    this.onAction,
+    this.actionLabel = 'Retry',
+    super.key,
+  });
 
-class PreviewNotice extends StatelessWidget {
-  const PreviewNotice({super.key});
+  final String message;
+  final VoidCallback? onAction;
+  final String actionLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -108,24 +94,29 @@ class PreviewNotice extends StatelessWidget {
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(24, 2, 24, 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: colors.surfaceContainer,
+        color: colors.errorContainer,
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: <Widget>[
-          Icon(Icons.science_outlined, size: 18, color: colors.primary),
+          Icon(Icons.cloud_off_rounded, size: 18, color: colors.onErrorContainer),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Preview only · Nothing is sent to Fix Loop',
+              message,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: colors.onSurfaceVariant,
+                    color: colors.onErrorContainer,
                     fontWeight: FontWeight.w700,
                   ),
             ),
           ),
+          if (onAction != null)
+            TextButton(
+              onPressed: onAction,
+              child: Text(actionLabel),
+            ),
         ],
       ),
     );
@@ -190,12 +181,14 @@ class PrimaryAction extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.icon,
+    this.busy = false,
     super.key,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final IconData? icon;
+  final bool busy;
 
   @override
   Widget build(BuildContext context) {
@@ -203,13 +196,21 @@ class PrimaryAction extends StatelessWidget {
     return SizedBox(
       width: double.infinity,
       child: FilledButton(
-        onPressed: onPressed,
+        onPressed: busy ? null : onPressed,
         child: Row(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
+            if (busy) ...<Widget>[
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 10),
+            ],
             Flexible(child: Text(label, textAlign: TextAlign.center)),
-            if (iconData != null) ...<Widget>[
+            if (!busy && iconData != null) ...<Widget>[
               const SizedBox(width: 8),
               Icon(iconData, size: 20),
             ],
@@ -222,32 +223,32 @@ class PrimaryAction extends StatelessWidget {
 
 class StatusBadge extends StatelessWidget {
   const StatusBadge({required this.status, super.key});
-  final PreviewStatus status;
+  final ComplaintStatus status;
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final (fill, foreground) = switch (status) {
-      PreviewStatus.reported => dark
+      ComplaintStatus.reported => dark
           ? (const Color(0xFF3A424D), const Color(0xFFC8D1DD))
           : (const Color(0xFFDDE3EA), const Color(0xFF3F4A58)),
-      PreviewStatus.assigned => dark
+      ComplaintStatus.assigned => dark
           ? (const Color(0xFF1E3A5F), const Color(0xFFAFCBFF))
           : (const Color(0xFFD3E4FF), const Color(0xFF1D4E89)),
-      PreviewStatus.inProgress => dark
+      ComplaintStatus.inProgress => dark
           ? (const Color(0xFF4D3B00), const Color(0xFFFFDF8F))
           : (const Color(0xFFFFE29A), const Color(0xFF5B4300)),
-      PreviewStatus.resolved => dark
+      ComplaintStatus.resolved => dark
           ? (const Color(0xFF00423B), const Color(0xFF9FF0E0))
           : (const Color(0xFFB4ECE0), const Color(0xFF00504A)),
-      PreviewStatus.verified => dark
+      ComplaintStatus.verified => dark
           ? (const Color(0xFF1E4D22), const Color(0xFFA8E6A0))
           : (const Color(0xFFC3EFB5), const Color(0xFF1B5E20)),
-      PreviewStatus.reopened => (
+      ComplaintStatus.reopened => (
           Theme.of(context).colorScheme.errorContainer,
           Theme.of(context).colorScheme.onErrorContainer,
         ),
-      PreviewStatus.rejected => dark
+      ComplaintStatus.rejected => dark
           ? (const Color(0xFF3B3633), const Color(0xFFCFC8C3))
           : (const Color(0xFFE5E1DE), const Color(0xFF4A4643)),
     };
@@ -381,7 +382,6 @@ class MoonArch extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Leave room for larger system text instead of clipping the arch's contents.
         final textScale = MediaQuery.textScalerOf(context).scale(18) / 18;
         final extraHeight = (textScale - 1).clamp(0.0, 2.0) * 140;
         final effectiveHeight = height + extraHeight;
@@ -403,4 +403,18 @@ class MoonArch extends StatelessWidget {
       },
     );
   }
+}
+
+String formatRelativeTime(DateTime dateTime) {
+  final diff = DateTime.now().toUtc().difference(dateTime.toUtc());
+  if (diff.isNegative) {
+    final ahead = dateTime.toUtc().difference(DateTime.now().toUtc());
+    if (ahead.inMinutes < 60) return 'in ${ahead.inMinutes}m';
+    if (ahead.inHours < 48) return 'in ${ahead.inHours}h';
+    return 'in ${ahead.inDays}d';
+  }
+  if (diff.inMinutes < 1) return 'just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  return '${diff.inDays}d ago';
 }

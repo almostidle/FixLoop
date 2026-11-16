@@ -72,5 +72,13 @@ class AttachmentServiceTest {
             keys.add(key);
             written = content;
         }
+
+        @Override
+        public java.util.Optional<byte[]> load(String key) {
+            if (keys.contains(key) && written != null) {
+                return java.util.Optional.of(written);
+            }
+            return java.util.Optional.empty();
+        }
     }
 }

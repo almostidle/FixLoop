@@ -1,8 +1,13 @@
+import 'dart:typed_data';
+
 import 'package:image_picker/image_picker.dart';
 
-import 'preview_models.dart';
+class PreviewPhoto {
+  const PreviewPhoto(this.bytes);
+  final Uint8List bytes;
+}
 
-/// Isolated behind an interface so preview flows can be tested without a device.
+/// Isolated behind an interface so photo flows can be tested without a device.
 abstract interface class PreviewPhotoPicker {
   Future<PreviewPhoto?> pickPhoto();
 }

@@ -137,8 +137,8 @@ class AuthFlowIT {
         assertThat(unknownEmail.getBody().get("message")).isEqualTo(wrongPassword.getBody().get("message"));
 
         String accessToken = (String) login(email, PASSWORD).getBody().get("accessToken");
-        // A student holds a valid token but no domain endpoint opens for them yet.
-        ResponseEntity<Map> forbidden = exchange("/api/v1/complaints", accessToken);
+        // Staff directory is restricted to SUPERVISOR and ADMIN roles.
+        ResponseEntity<Map> forbidden = exchange("/api/v1/users/staff", accessToken);
         assertThat(forbidden.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
         assertThat(forbidden.getBody()).containsEntry("code", "FORBIDDEN");
     }
