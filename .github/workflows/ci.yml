@@ -31,9 +31,11 @@ jobs:
             exit 0
           fi
           python3 - <<'PY'
-          import os
+          import os, re
           from pathlib import Path
-          log = Path(os.environ['RUNNER_TEMP'], 'mvn-verify.log').read_text(errors='replace')[-14000:]
+          text = Path(os.environ['RUNNER_TEMP'], 'mvn-verify.log').read_text(errors='replace')
+          m = re.search(r'(\[ERROR\] Failures:.*|\[ERROR\] Errors:.*|\[ERROR\] Tests run:.*)', text, re.S)
+          log = m.group(1)[-3500:] if m else text[-3500:]
           log = log.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
           print(f'::error title=Maven verify output::{log}')
           PY
@@ -123,7 +125,7 @@ jobs:
           python3 - <<'PY'
           import os
           from pathlib import Path
-          log = Path(os.environ['RUNNER_TEMP'], 'flutter-test.log').read_text(errors='replace')[-14000:]
+          log = Path(os.environ['RUNNER_TEMP'], 'flutter-test.log').read_text(errors='replace')[-3500:]
           log = log.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
           print(f'::error title=Flutter widget test output::{log}')
           PY
