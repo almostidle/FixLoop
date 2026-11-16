@@ -194,7 +194,7 @@ void main() {
     expect(find.text('Fixed, please check'), findsWidgets);
 
     await tapVisible(tester, find.byTooltip('Back'));
-    await tapVisible(tester, find.text('Analytics'));
+    await tapVisible(tester, find.byIcon(Icons.analytics_outlined));
     expect(find.text('Operations overview'), findsOneWidget);
     expect(find.text('Open by department'), findsOneWidget);
   });
